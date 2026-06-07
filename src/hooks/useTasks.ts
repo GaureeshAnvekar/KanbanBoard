@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { NewTaskInput, Task, TaskStatus, TeamMember } from '../types/task'
+import type { NewTaskInput, Task, TaskLabel, TaskStatus, TeamMember } from '../types/task'
 import { TASK_COLUMNS } from '../types/task'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 
@@ -20,19 +20,27 @@ function createEmptyGroups() {
   )
 }
 
-type TaskRow = Omit<Task, 'assignees'>
+type TaskRow = Omit<Task, 'assignees' | 'labels'>
 
 type AssignmentRow = {
   task_id: string
   team_member_id: string
 }
 
-function attachAssignees(
+type LabelAssignmentRow = {
+  task_id: string
+  label_id: string
+}
+
+function attachTaskRelations(
   taskRows: TaskRow[],
   assignments: AssignmentRow[],
   teamMembers: TeamMember[],
+  labelAssignments: LabelAssignmentRow[],
+  labels: TaskLabel[],
 ): Task[] {
   const membersById = new Map(teamMembers.map((member) => [member.id, member]))
+  const labelsById = new Map(labels.map((label) => [label.id, label]))
 
   return taskRows.map((task) => ({
     ...task,
@@ -40,6 +48,10 @@ function attachAssignees(
       .filter((assignment) => assignment.task_id === task.id)
       .map((assignment) => membersById.get(assignment.team_member_id))
       .filter((member): member is TeamMember => Boolean(member)),
+    labels: labelAssignments
+      .filter((assignment) => assignment.task_id === task.id)
+      .map((assignment) => labelsById.get(assignment.label_id))
+      .filter((label): label is TaskLabel => Boolean(label)),
   }))
 }
 
@@ -126,7 +138,13 @@ async function loadTasksWithAssignees(userId: string) {
     return { data: [] as Task[], error: null }
   }
 
-  const [tasksResponse, assignmentsResponse, teamResponse] = await Promise.all([
+  const [
+    tasksResponse,
+    assignmentsResponse,
+    teamResponse,
+    labelAssignmentsResponse,
+    labelsResponse,
+  ] = await Promise.all([
     supabase
       .from('tasks')
       .select('*')
@@ -135,9 +153,16 @@ async function loadTasksWithAssignees(userId: string) {
       .order('created_at', { ascending: true }),
     supabase.from('task_assignees').select('task_id, team_member_id').eq('user_id', userId),
     supabase.from('team_members').select('*').order('created_at', { ascending: true }),
+    supabase.from('task_labels').select('task_id, label_id').eq('user_id', userId),
+    supabase.from('labels').select('*').order('created_at', { ascending: true }),
   ])
 
-  const error = tasksResponse.error ?? assignmentsResponse.error ?? teamResponse.error
+  const error =
+    tasksResponse.error ??
+    assignmentsResponse.error ??
+    teamResponse.error ??
+    labelAssignmentsResponse.error ??
+    labelsResponse.error
 
   if (error) {
     return { data: [] as Task[], error }
@@ -145,10 +170,12 @@ async function loadTasksWithAssignees(userId: string) {
 
   return {
     data: sortTasks(
-      attachAssignees(
+      attachTaskRelations(
         (tasksResponse.data ?? []) as TaskRow[],
         (assignmentsResponse.data ?? []) as AssignmentRow[],
         (teamResponse.data ?? []) as TeamMember[],
+        (labelAssignmentsResponse.data ?? []) as LabelAssignmentRow[],
+        (labelsResponse.data ?? []) as TaskLabel[],
       ),
     ),
     error: null,
@@ -272,10 +299,25 @@ export function useTasks(userId?: string): TaskState {
         }
       }
 
+      if (input.labelIds.length) {
+        const { error: labelError } = await supabase.from('task_labels').insert(
+          input.labelIds.map((labelId) => ({
+            task_id: data.id,
+            label_id: labelId,
+            user_id: userId,
+          })),
+        )
+
+        if (labelError) {
+          setError(labelError.message)
+          return
+        }
+      }
+
       const { data: refreshedTasks, error: refreshError } = await loadTasksWithAssignees(userId)
 
       if (refreshError) {
-        setTasks((current) => sortTasks([...current, { ...data, assignees: [] }]))
+        setTasks((current) => sortTasks([...current, { ...data, assignees: [], labels: [] }]))
         setError(refreshError.message)
         return
       }

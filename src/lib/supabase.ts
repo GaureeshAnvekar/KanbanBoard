@@ -90,6 +90,51 @@ export type Database = {
         }
         Relationships: []
       }
+      labels: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          color: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          name: string
+          color?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          color?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      task_labels: {
+        Row: {
+          task_id: string
+          label_id: string
+          user_id: string
+          created_at: string
+        }
+        Insert: {
+          task_id: string
+          label_id: string
+          user_id?: string
+          created_at?: string
+        }
+        Update: {
+          task_id?: string
+          label_id?: string
+          user_id?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: Record<string, never>
     Functions: Record<string, never>

@@ -11,6 +11,14 @@ export type TeamMember = {
   created_at: string
 }
 
+export type TaskLabel = {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  created_at: string
+}
+
 export type Task = {
   id: string
   title: string
@@ -22,6 +30,7 @@ export type Task = {
   due_date: string | null
   position: number
   assignees: TeamMember[]
+  labels: TaskLabel[]
 }
 
 export type NewTaskInput = {
@@ -30,11 +39,17 @@ export type NewTaskInput = {
   priority: TaskPriority
   dueDate?: string
   assigneeIds: string[]
+  labelIds: string[]
 }
 
 export type NewTeamMemberInput = {
   name: string
   avatarUrl?: string
+  color: string
+}
+
+export type NewLabelInput = {
+  name: string
   color: string
 }
 
