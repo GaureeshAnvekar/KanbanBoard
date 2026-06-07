@@ -2,6 +2,15 @@ export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done'
 
 export type TaskPriority = 'low' | 'normal' | 'high'
 
+export type TeamMember = {
+  id: string
+  user_id: string
+  name: string
+  avatar_url: string | null
+  color: string
+  created_at: string
+}
+
 export type Task = {
   id: string
   title: string
@@ -11,6 +20,8 @@ export type Task = {
   description: string | null
   priority: TaskPriority
   due_date: string | null
+  position: number
+  assignees: TeamMember[]
 }
 
 export type NewTaskInput = {
@@ -18,6 +29,13 @@ export type NewTaskInput = {
   description?: string
   priority: TaskPriority
   dueDate?: string
+  assigneeIds: string[]
+}
+
+export type NewTeamMemberInput = {
+  name: string
+  avatarUrl?: string
+  color: string
 }
 
 export type TaskColumn = {

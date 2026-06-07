@@ -16,6 +16,7 @@ export type Database = {
           description: string | null
           priority: TaskPriority
           due_date: string | null
+          position: number
         }
         Insert: {
           id?: string
@@ -26,6 +27,7 @@ export type Database = {
           description?: string | null
           priority?: TaskPriority
           due_date?: string | null
+          position?: number
         }
         Update: {
           id?: string
@@ -36,6 +38,55 @@ export type Database = {
           description?: string | null
           priority?: TaskPriority
           due_date?: string | null
+          position?: number
+        }
+        Relationships: []
+      }
+      team_members: {
+        Row: {
+          id: string
+          user_id: string
+          name: string
+          avatar_url: string | null
+          color: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          name: string
+          avatar_url?: string | null
+          color?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          name?: string
+          avatar_url?: string | null
+          color?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      task_assignees: {
+        Row: {
+          task_id: string
+          team_member_id: string
+          user_id: string
+          created_at: string
+        }
+        Insert: {
+          task_id: string
+          team_member_id: string
+          user_id?: string
+          created_at?: string
+        }
+        Update: {
+          task_id?: string
+          team_member_id?: string
+          user_id?: string
+          created_at?: string
         }
         Relationships: []
       }

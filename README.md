@@ -8,7 +8,11 @@ A polished Kanban-style task board built with React, TypeScript, Supabase anonym
 - User-scoped tasks with Supabase Row Level Security.
 - Four default board columns: To Do, In Progress, In Review, Done.
 - Create tasks with title, description, priority, and optional due date.
+- Create a small team with member names, optional avatar URLs, and profile colors.
+- Assign one or more team members to each task.
+- Display assignee avatars directly on task cards.
 - Drag tasks between columns with optimistic persistence on drop.
+- Reorder tasks within a column with persisted card positions.
 - Responsive layout, loading skeletons, empty states, and inline error handling.
 
 ## Setup
@@ -42,10 +46,10 @@ npm run dev
 
 1. Create a Supabase project.
 2. Enable anonymous sign-ins in Authentication settings.
-3. Run `supabase/migrations/001_create_tasks.sql` in the SQL editor or through the Supabase CLI.
+3. Run the SQL files in `supabase/migrations/` in order through the SQL editor or Supabase CLI.
 4. Use the public anon key in `.env.local`. Do not use or commit a service role key.
 
-The migration creates `public.tasks`, enables RLS, and adds policies that only allow each authenticated guest to read, create, update, and delete their own rows.
+The migrations create `public.tasks`, `public.team_members`, and `public.task_assignees`, enable RLS, and add policies that only allow each authenticated guest to read, create, update, and delete their own rows.
 
 ## Scripts
 

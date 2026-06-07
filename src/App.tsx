@@ -4,20 +4,39 @@ import {
   DragOverlay,
   PointerSensor,
   closestCorners,
-  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { format, isPast, parseISO } from 'date-fns'
-import { AlertCircle, Calendar, CheckCircle2, Clock3, Loader2, Plus, Sparkles } from 'lucide-react'
+import {
+  AlertCircle,
+  Calendar,
+  CheckCircle2,
+  Clock3,
+  Loader2,
+  Plus,
+  Sparkles,
+  UserPlus,
+  Users,
+} from 'lucide-react'
 import './App.css'
 import { useGuestSession } from './hooks/useGuestSession'
+import { useTeamMembers } from './hooks/useTeamMembers'
 import { useTasks } from './hooks/useTasks'
-import { TASK_COLUMNS, type NewTaskInput, type Task, type TaskPriority, type TaskStatus } from './types/task'
+import {
+  TASK_COLUMNS,
+  type NewTaskInput,
+  type NewTeamMemberInput,
+  type Task,
+  type TaskPriority,
+  type TaskStatus,
+  type TeamMember,
+} from './types/task'
 
 const priorityTone: Record<TaskPriority, string> = {
   low: 'priority-low',
@@ -31,11 +50,20 @@ const priorityLabel: Record<TaskPriority, string> = {
   high: 'High',
 }
 
+const memberColors = ['#4f46e5', '#0891b2', '#16a34a', '#db2777', '#ea580c', '#7c3aed']
+
 function App() {
   const { session, isLoading: isSessionLoading, error: sessionError } = useGuestSession()
-  const { tasks, tasksByStatus, isLoading, error, createTask, moveTask, refreshTasks } = useTasks(
+  const { tasks, tasksByStatus, isLoading, error, createTask, reorderTask, refreshTasks } = useTasks(
     session?.user.id,
   )
+  const {
+    teamMembers,
+    isLoading: isTeamLoading,
+    error: teamError,
+    createTeamMember,
+    refreshTeamMembers,
+  } = useTeamMembers(session?.user.id)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
 
   const sensors = useSensors(
@@ -50,8 +78,8 @@ function App() {
     const completed = tasksByStatus.done.length
     const open = tasks.length - completed
 
-    return { completed, open }
-  }, [tasks.length, tasksByStatus.done.length])
+    return { completed, open, teamSize: teamMembers.length }
+  }, [tasks.length, tasksByStatus.done.length, teamMembers.length])
 
   function handleDragStart(event: DragStartEvent) {
     const task = tasks.find((candidate) => candidate.id === event.active.id)
@@ -59,19 +87,23 @@ function App() {
   }
 
   async function handleDragEnd(event: DragEndEvent) {
-    const nextStatus = event.over?.id as TaskStatus | undefined
+    const overId = event.over?.id as string | undefined
     const taskId = event.active.id as string
 
     setActiveTask(null)
 
-    if (!nextStatus || !TASK_COLUMNS.some((column) => column.id === nextStatus)) {
+    if (!overId) {
       return
     }
 
-    await moveTask(taskId, nextStatus)
+    await reorderTask(taskId, overId)
   }
 
-  const blockingError = sessionError || error
+  const blockingError = sessionError || error || teamError
+
+  async function handleRetry() {
+    await Promise.all([refreshTasks(), refreshTeamMembers()])
+  }
 
   return (
     <main className="app-shell">
@@ -98,18 +130,26 @@ function App() {
             <strong>{stats.completed}</strong>
           </div>
           <div>
-            <span className="summary-label">Guest ID</span>
-            <code>{session?.user.id.slice(0, 8) ?? 'starting'}</code>
+            <span className="summary-label">Team</span>
+            <strong>{stats.teamSize}</strong>
           </div>
         </div>
       </section>
 
-      {blockingError ? <ErrorBanner message={blockingError} onRetry={refreshTasks} /> : null}
+      {blockingError ? <ErrorBanner message={blockingError} onRetry={handleRetry} /> : null}
 
       <TaskComposer
         disabled={!session || isSessionLoading}
         isBooting={isSessionLoading}
+        teamMembers={teamMembers}
         onCreate={createTask}
+      />
+
+      <TeamPanel
+        disabled={!session || isSessionLoading}
+        isLoading={isTeamLoading}
+        teamMembers={teamMembers}
+        onCreate={createTeamMember}
       />
 
       <DndContext
@@ -139,16 +179,19 @@ function App() {
 function TaskComposer({
   disabled,
   isBooting,
+  teamMembers,
   onCreate,
 }: {
   disabled: boolean
   isBooting: boolean
+  teamMembers: TeamMember[]
   onCreate: (input: NewTaskInput) => Promise<void>
 }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [priority, setPriority] = useState<TaskPriority>('normal')
   const [dueDate, setDueDate] = useState('')
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -159,12 +202,21 @@ function TaskComposer({
     }
 
     setIsSaving(true)
-    await onCreate({ title, description, priority, dueDate })
+    await onCreate({ title, description, priority, dueDate, assigneeIds })
     setTitle('')
     setDescription('')
     setPriority('normal')
     setDueDate('')
+    setAssigneeIds([])
     setIsSaving(false)
+  }
+
+  function toggleAssignee(memberId: string) {
+    setAssigneeIds((current) =>
+      current.includes(memberId)
+        ? current.filter((candidate) => candidate !== memberId)
+        : [...current, memberId],
+    )
   }
 
   return (
@@ -208,12 +260,131 @@ function TaskComposer({
             disabled={disabled || isSaving}
           />
         </label>
+        <div className="assignee-picker">
+          <span>Assignees</span>
+          {teamMembers.length ? (
+            <div className="assignee-options">
+              {teamMembers.map((member) => (
+                <button
+                  key={member.id}
+                  type="button"
+                  className={assigneeIds.includes(member.id) ? 'assignee-option selected' : 'assignee-option'}
+                  onClick={() => toggleAssignee(member.id)}
+                  disabled={disabled || isSaving}
+                >
+                  <Avatar member={member} size="sm" />
+                  {member.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p>Add team members below to assign work.</p>
+          )}
+        </div>
         <button type="submit" disabled={disabled || isSaving || !title.trim()}>
           {isSaving || isBooting ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
           Add task
         </button>
       </div>
     </form>
+  )
+}
+
+function TeamPanel({
+  disabled,
+  isLoading,
+  teamMembers,
+  onCreate,
+}: {
+  disabled: boolean
+  isLoading: boolean
+  teamMembers: TeamMember[]
+  onCreate: (input: NewTeamMemberInput) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState('')
+  const [color, setColor] = useState(memberColors[0])
+  const [isSaving, setIsSaving] = useState(false)
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!name.trim()) {
+      return
+    }
+
+    setIsSaving(true)
+    await onCreate({ name, avatarUrl, color })
+    setName('')
+    setAvatarUrl('')
+    setColor(memberColors[0])
+    setIsSaving(false)
+  }
+
+  return (
+    <section className="team-panel" aria-labelledby="team-title">
+      <div className="team-heading">
+        <div>
+          <span className="team-icon">
+            <Users size={18} />
+          </span>
+          <div>
+            <h2 id="team-title">Team Members</h2>
+            <p>Create a small team and assign people to tasks.</p>
+          </div>
+        </div>
+        <div className="team-roster" aria-label="Current team members">
+          {isLoading ? (
+            <span className="team-loading">Loading team...</span>
+          ) : teamMembers.length ? (
+            teamMembers.map((member) => <Avatar key={member.id} member={member} />)
+          ) : (
+            <span className="team-loading">No members yet</span>
+          )}
+        </div>
+      </div>
+
+      <form className="member-form" onSubmit={handleSubmit}>
+        <label>
+          Name
+          <input
+            placeholder="Avery Brooks"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={disabled || isSaving}
+          />
+        </label>
+        <label>
+          Avatar URL
+          <input
+            placeholder="Optional image URL"
+            value={avatarUrl}
+            onChange={(event) => setAvatarUrl(event.target.value)}
+            disabled={disabled || isSaving}
+          />
+        </label>
+        <label>
+          Color
+          <div className="color-row">
+            {memberColors.map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                className={candidate === color ? 'color-swatch selected' : 'color-swatch'}
+                style={{ background: candidate }}
+                aria-label={`Use ${candidate} as member color`}
+                onClick={() => setColor(candidate)}
+                disabled={disabled || isSaving}
+              />
+            ))}
+          </div>
+        </label>
+        <button type="submit" disabled={disabled || isSaving || !name.trim()}>
+          {isSaving ? <Loader2 className="spin" size={18} /> : <UserPlus size={18} />}
+          Add member
+        </button>
+      </form>
+    </section>
   )
 }
 
@@ -239,27 +410,30 @@ function KanbanColumn({
       </header>
       <p className="column-description">{column.description}</p>
 
-      <div className="task-stack">
-        {isLoading ? (
-          <LoadingCards />
-        ) : tasks.length ? (
-          tasks.map((task) => <DraggableTaskCard key={task.id} task={task} />)
-        ) : (
-          <EmptyState status={column.id} />
-        )}
-      </div>
+      <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+        <div className="task-stack">
+          {isLoading ? (
+            <LoadingCards />
+          ) : tasks.length ? (
+            tasks.map((task) => <SortableTaskCard key={task.id} task={task} />)
+          ) : (
+            <EmptyState status={column.id} />
+          )}
+        </div>
+      </SortableContext>
     </section>
   )
 }
 
-function DraggableTaskCard({ task }: { task: Task }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+function SortableTaskCard({ task }: { task: Task }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { task },
   })
 
   const style: CSSProperties = {
-    transform: CSS.Translate.toString(transform),
+    transform: CSS.Transform.toString(transform),
+    transition,
   }
 
   return (
@@ -297,8 +471,46 @@ function TaskCard({ task, isOverlay = false }: { task: Task; isOverlay?: boolean
         ) : (
           <span className="due-date muted">No due date</span>
         )}
+        <AssigneeStack assignees={task.assignees} />
       </footer>
     </article>
+  )
+}
+
+function AssigneeStack({ assignees }: { assignees: TeamMember[] }) {
+  if (!assignees.length) {
+    return <span className="unassigned">Unassigned</span>
+  }
+
+  return (
+    <div className="assignee-stack" aria-label={assignees.map((member) => member.name).join(', ')}>
+      {assignees.slice(0, 3).map((member) => (
+        <Avatar key={member.id} member={member} size="sm" />
+      ))}
+      {assignees.length > 3 ? <span className="avatar-more">+{assignees.length - 3}</span> : null}
+    </div>
+  )
+}
+
+function Avatar({ member, size = 'md' }: { member: TeamMember; size?: 'sm' | 'md' }) {
+  const initials = member.name
+    .split(' ')
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase()
+
+  return member.avatar_url ? (
+    <img
+      className={`avatar ${size}`}
+      src={member.avatar_url}
+      alt={member.name}
+      style={{ borderColor: member.color }}
+    />
+  ) : (
+    <span className={`avatar ${size}`} style={{ background: member.color }}>
+      {initials}
+    </span>
   )
 }
 
