@@ -18,6 +18,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock3,
+  List,
   Loader2,
   MessageCircle,
   Plus,
@@ -266,7 +267,6 @@ function App() {
             teamMembers={teamMembers}
             onCreate={async (input) => {
               await createTeamMember(input)
-              setActiveActionPanel(null)
             }}
           />
         ) : null}
@@ -359,6 +359,7 @@ function ToolbarMemberStack({ teamMembers }: { teamMembers: TeamMember[] }) {
           {isExpanded ? <span className="toolbar-member-name">{member.name}</span> : null}
         </span>
       ))}
+      {!isExpanded ? <List className="toolbar-member-expand-icon" size={16} aria-hidden="true" /> : null}
     </button>
   )
 }
@@ -763,7 +764,7 @@ function TaskComposer({
                 ))}
               </div>
             ) : (
-              <p>Add team members below to assign work.</p>
+              <p>Create team members first to assign work.</p>
             )}
           </div>
           <div className="label-picker">
@@ -785,7 +786,7 @@ function TaskComposer({
                 ))}
               </div>
             ) : (
-              <p>Add labels below to tag work.</p>
+              <p>Create labels first to tag work.</p>
             )}
           </div>
         </div>

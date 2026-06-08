@@ -69,9 +69,9 @@
   align-items: center;
   justify-content: flex-start;
   min-height: 32px;
-  max-width: 86px;
+  max-width: 104px;
   margin-left: 6px;
-  padding: 0 4px;
+  padding: 0 6px 0 4px;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -93,6 +93,7 @@
 
 .toolbar-member-stack.expanded {
   max-width: 720px;
+  padding-right: 4px;
 }
 
 .toolbar-member-item {
@@ -138,6 +139,14 @@
   overflow: hidden;
   max-width: 140px;
   text-overflow: ellipsis;
+}
+
+.toolbar-member-expand-icon {
+  flex: 0 0 auto;
+  margin-left: 0;
+  color: var(--text-muted);
+  opacity: 0.72;
+  transform: translateY(1px);
 }
 
 .summary-tiles {
@@ -880,6 +889,11 @@ input,
 select {
   min-height: 44px;
   padding: 0 14px;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.9;
 }
 
 textarea {
