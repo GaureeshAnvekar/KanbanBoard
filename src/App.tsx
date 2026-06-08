@@ -19,7 +19,6 @@ import {
   CheckCircle2,
   Clock3,
   Loader2,
-  MoreHorizontal,
   Plus,
   Search,
   Tag,
@@ -144,6 +143,19 @@ function App() {
     )
   }, [filteredTasks])
 
+  const taskSummary = useMemo(() => {
+    const completed = tasks.filter((task) => task.status === 'done').length
+    const overdue = tasks.filter(
+      (task) => task.status !== 'done' && task.due_date && isPast(parseISO(task.due_date)),
+    ).length
+
+    return {
+      total: tasks.length,
+      completed,
+      overdue,
+    }
+  }, [tasks])
+
   function handleDragStart(event: DragStartEvent) {
     const task = tasks.find((candidate) => candidate.id === event.active.id)
     setActiveTask(task ?? null)
@@ -207,7 +219,9 @@ function App() {
             <Tag size={16} />
             Label
           </button>
+          <ToolbarMemberStack teamMembers={teamMembers} />
         </div>
+        <SummaryTiles summary={taskSummary} />
       </section>
 
       <ActionModal activePanel={activeActionPanel} onClose={() => setActiveActionPanel(null)}>
@@ -279,6 +293,65 @@ function App() {
         <DragOverlay>{activeTask ? <TaskCard task={activeTask} isOverlay /> : null}</DragOverlay>
       </DndContext>
     </main>
+  )
+}
+
+function ToolbarMemberStack({ teamMembers }: { teamMembers: TeamMember[] }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  if (!teamMembers.length) {
+    return null
+  }
+
+  const visibleMembers = isExpanded ? teamMembers : teamMembers.slice(0, 3)
+
+  return (
+    <button
+      type="button"
+      className={isExpanded ? 'toolbar-member-stack expanded' : 'toolbar-member-stack'}
+      aria-label={isExpanded ? 'Collapse team members' : 'Show all team members'}
+      aria-expanded={isExpanded}
+      onClick={() => setIsExpanded((current) => !current)}
+    >
+      {visibleMembers.map((member) => (
+        <span key={member.id} className="toolbar-member-item" title={member.name}>
+          <span
+            className="toolbar-member-dot"
+            style={{ background: member.color }}
+          >
+            {member.name.charAt(0).toUpperCase()}
+          </span>
+          {isExpanded ? <span className="toolbar-member-name">{member.name}</span> : null}
+        </span>
+      ))}
+    </button>
+  )
+}
+
+function SummaryTiles({
+  summary,
+}: {
+  summary: {
+    total: number
+    completed: number
+    overdue: number
+  }
+}) {
+  return (
+    <div className="summary-tiles" aria-label="Task summary">
+      <article className="summary-tile">
+        <span>Total tasks</span>
+        <strong>{summary.total}</strong>
+      </article>
+      <article className="summary-tile">
+        <span>Completed</span>
+        <strong>{summary.completed}</strong>
+      </article>
+      <article className="summary-tile summary-tile-overdue">
+        <span>Overdue</span>
+        <strong>{summary.overdue}</strong>
+      </article>
+    </div>
   )
 }
 
@@ -369,8 +442,12 @@ function TaskComposer({
     )
   }
 
-  function selectLabel(labelId: string) {
-    setLabelIds([labelId])
+  function toggleLabel(labelId: string) {
+    setLabelIds((current) =>
+      current.includes(labelId)
+        ? current.filter((candidate) => candidate !== labelId)
+        : [...current, labelId],
+    )
   }
 
   return (
@@ -418,7 +495,7 @@ function TaskComposer({
             </label>
           </div>
           <div className="assignee-picker">
-            <span>Assignees</span>
+            <span>Select Assignees</span>
             {teamMembers.length ? (
               <div className="assignee-options">
                 {teamMembers.map((member) => (
@@ -439,17 +516,17 @@ function TaskComposer({
             )}
           </div>
           <div className="label-picker">
-            <span>Labels</span>
+            <span>Select Labels</span>
             {labels.length ? (
-              <div className="single-label-list" role="listbox" aria-label="Select one label">
+              <div className="multi-label-list" role="listbox" aria-label="Select labels" aria-multiselectable="true">
                 {labels.map((label) => (
                   <button
                     key={label.id}
                     type="button"
-                    className={labelIds[0] === label.id ? 'single-label-row selected' : 'single-label-row'}
-                    onClick={() => selectLabel(label.id)}
+                    className={labelIds.includes(label.id) ? 'multi-label-row selected' : 'multi-label-row'}
+                    onClick={() => toggleLabel(label.id)}
                     disabled={disabled || isSaving}
-                    aria-selected={labelIds[0] === label.id}
+                    aria-selected={labelIds.includes(label.id)}
                   >
                     <span style={{ background: label.color }} />
                     {label.name}
@@ -499,74 +576,90 @@ function FilterPanel({
 
   return (
     <section className={isOpen ? 'filter-panel open' : 'filter-panel'} aria-label="Task filters">
-      <button
-        type="button"
-        className="filter-heading"
-        onClick={onToggle}
-        aria-expanded={isOpen}
-        aria-controls="task-filter-controls"
-      >
-        <span>
-          <Search size={16} />
-          Filters
-        </span>
+      <div className="filter-heading">
+        <button
+          type="button"
+          className="filter-toggle"
+          onClick={onToggle}
+          aria-expanded={isOpen}
+          aria-controls="task-filter-controls"
+        >
+          <span>
+            <Search size={16} />
+            Filters
+          </span>
+        </button>
+        {isOpen ? (
+          <div className="search-field filter-header-search">
+            <Search size={13} />
+            <input
+              type="search"
+              value={filters.search}
+              placeholder="Search title"
+              aria-label="Search tasks by title"
+              onChange={(event) => updateFilter({ search: event.target.value })}
+            />
+          </div>
+        ) : null}
         <p>
           Showing {visibleCount} of {totalCount} tasks
         </p>
-      </button>
+      </div>
       <div
         className="filter-collapse"
         id="task-filter-controls"
         aria-hidden={!isOpen}
       >
-        <div className="filter-selects">
-          <label>
-            Priority
-            <select
-              value={filters.priority}
-              onChange={(event) =>
-                updateFilter({ priority: event.target.value as TaskFilters['priority'] })
-              }
-              tabIndex={isOpen ? 0 : -1}
-            >
-              <option value="all">All priorities</option>
-              <option value="low">Low</option>
-              <option value="normal">Normal</option>
-              <option value="high">High</option>
-            </select>
-          </label>
-          <label>
-            Assignee
-            <select
-              value={filters.assigneeId}
-              onChange={(event) => updateFilter({ assigneeId: event.target.value })}
-              tabIndex={isOpen ? 0 : -1}
-            >
-              <option value="all">All assignees</option>
-              <option value="unassigned">Unassigned</option>
-              {teamMembers.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Label
-            <select
-              value={filters.labelId}
-              onChange={(event) => updateFilter({ labelId: event.target.value })}
-              tabIndex={isOpen ? 0 : -1}
-            >
-              <option value="all">All labels</option>
-              <option value="unlabeled">Unlabeled</option>
-              {labels.map((label) => (
-                <option key={label.id} value={label.id}>
-                  {label.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="filter-controls">
+          <div className="filter-selects">
+            <label>
+              Priority
+              <select
+                value={filters.priority}
+                onChange={(event) =>
+                  updateFilter({ priority: event.target.value as TaskFilters['priority'] })
+                }
+                tabIndex={isOpen ? 0 : -1}
+              >
+                <option value="all">All priorities</option>
+                <option value="low">Low</option>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <label>
+              Assignee
+              <select
+                value={filters.assigneeId}
+                onChange={(event) => updateFilter({ assigneeId: event.target.value })}
+                tabIndex={isOpen ? 0 : -1}
+              >
+                <option value="all">All assignees</option>
+                <option value="unassigned">Unassigned</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Label
+              <select
+                value={filters.labelId}
+                onChange={(event) => updateFilter({ labelId: event.target.value })}
+                tabIndex={isOpen ? 0 : -1}
+              >
+                <option value="all">All labels</option>
+                <option value="unlabeled">Unlabeled</option>
+                {labels.map((label) => (
+                  <option key={label.id} value={label.id}>
+                    {label.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
       </div>
     </section>
@@ -638,15 +731,6 @@ function TeamPanel({
           />
         </label>
         <label>
-          Avatar URL
-          <input
-            placeholder="Optional image URL"
-            value={avatarUrl}
-            onChange={(event) => setAvatarUrl(event.target.value)}
-            disabled={disabled || isSaving}
-          />
-        </label>
-        <label>
           Color
           <div className="color-row">
             {memberColors.map((candidate) => (
@@ -662,7 +746,7 @@ function TeamPanel({
             ))}
           </div>
         </label>
-        <button type="submit" disabled={disabled || isSaving || !name.trim()}>
+        <button className="modal-primary-submit" type="submit" disabled={disabled || isSaving || !name.trim()}>
           {isSaving ? <Loader2 className="spin" size={18} /> : <UserPlus size={18} />}
           Add member
         </button>
@@ -749,7 +833,7 @@ function LabelPanel({
             ))}
           </div>
         </label>
-        <button type="submit" disabled={disabled || isSaving || !name.trim()}>
+        <button className="modal-primary-submit" type="submit" disabled={disabled || isSaving || !name.trim()}>
           {isSaving ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
           Add label
         </button>
@@ -777,14 +861,6 @@ function KanbanColumn({
           <h2>{column.title}</h2>
           <span className="task-count">{tasks.length}</span>
         </div>
-        <div className="column-actions">
-          <button type="button" aria-label={`${column.title} options`}>
-            <MoreHorizontal size={16} />
-          </button>
-          <button type="button" aria-label={`Add task to ${column.title}`}>
-            <Plus size={16} />
-          </button>
-        </div>
       </header>
 
       <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
@@ -796,12 +872,6 @@ function KanbanColumn({
           ) : (
             <EmptyState status={column.id} />
           )}
-          {!isLoading ? (
-            <button type="button" className="column-new-button">
-              <Plus size={15} />
-              New
-            </button>
-          ) : null}
         </div>
       </SortableContext>
     </section>
