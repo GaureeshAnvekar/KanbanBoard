@@ -19,6 +19,14 @@ export type TaskLabel = {
   created_at: string
 }
 
+export type TaskComment = {
+  id: string
+  task_id: string
+  user_id: string
+  body: string
+  created_at: string
+}
+
 export type Task = {
   id: string
   title: string
@@ -51,6 +59,11 @@ export type NewTeamMemberInput = {
 export type NewLabelInput = {
   name: string
   color: string
+}
+
+export type NewTaskCommentInput = {
+  taskId: string
+  body: string
 }
 
 export type TaskColumn = {

@@ -10,6 +10,8 @@ type TaskState = {
   error: string | null
   createTask: (input: NewTaskInput) => Promise<void>
   reorderTask: (taskId: string, overId: string) => Promise<void>
+  addTaskAssignee: (taskId: string, member: TeamMember) => Promise<void>
+  removeTaskAssignee: (taskId: string, teamMemberId: string) => Promise<void>
   refreshTasks: () => Promise<void>
 }
 
@@ -362,6 +364,75 @@ export function useTasks(userId?: string): TaskState {
     }
   }, [tasks])
 
+  const addTaskAssignee = useCallback(
+    async (taskId: string, member: TeamMember) => {
+      if (!supabase || !userId) {
+        setError('A guest session is required before updating assignees.')
+        return
+      }
+
+      const previousTasks = tasks
+      setError(null)
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId && !task.assignees.some((assignee) => assignee.id === member.id)
+            ? {
+                ...task,
+                assignees: [...task.assignees, member],
+              }
+            : task,
+        ),
+      )
+
+      const { error: addError } = await supabase.from('task_assignees').insert({
+        task_id: taskId,
+        team_member_id: member.id,
+        user_id: userId,
+      })
+
+      if (addError) {
+        setTasks(previousTasks)
+        setError(addError.message)
+      }
+    },
+    [tasks, userId],
+  )
+
+  const removeTaskAssignee = useCallback(
+    async (taskId: string, teamMemberId: string) => {
+      if (!supabase || !userId) {
+        setError('A guest session is required before updating assignees.')
+        return
+      }
+
+      const previousTasks = tasks
+      setError(null)
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId
+            ? {
+                ...task,
+                assignees: task.assignees.filter((member) => member.id !== teamMemberId),
+              }
+            : task,
+        ),
+      )
+
+      const { error: removeError } = await supabase
+        .from('task_assignees')
+        .delete()
+        .eq('user_id', userId)
+        .eq('task_id', taskId)
+        .eq('team_member_id', teamMemberId)
+
+      if (removeError) {
+        setTasks(previousTasks)
+        setError(removeError.message)
+      }
+    },
+    [tasks, userId],
+  )
+
   const tasksByStatus = useMemo(() => {
     return sortTasks(tasks).reduce(
       (groups, task) => {
@@ -379,6 +450,8 @@ export function useTasks(userId?: string): TaskState {
     error,
     createTask,
     reorderTask,
+    addTaskAssignee,
+    removeTaskAssignee,
     refreshTasks,
   }
 }

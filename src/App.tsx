@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Clock3,
   Loader2,
+  MessageCircle,
   Plus,
   Search,
   Tag,
@@ -30,6 +31,7 @@ import './App.css'
 import { useGuestSession } from './hooks/useGuestSession'
 import { useLabels } from './hooks/useLabels'
 import { useTeamMembers } from './hooks/useTeamMembers'
+import { useTaskComments } from './hooks/useTaskComments'
 import { useTasks } from './hooks/useTasks'
 import {
   TASK_COLUMNS,
@@ -37,6 +39,7 @@ import {
   type NewTaskInput,
   type NewTeamMemberInput,
   type Task,
+  type TaskComment,
   type TaskLabel,
   type TaskPriority,
   type TaskStatus,
@@ -94,9 +97,16 @@ function taskMatchesFilters(task: Task, filters: TaskFilters) {
 
 function App() {
   const { session, isLoading: isSessionLoading, error: sessionError } = useGuestSession()
-  const { tasks, isLoading, error, createTask, reorderTask, refreshTasks } = useTasks(
-    session?.user.id,
-  )
+  const {
+    tasks,
+    isLoading,
+    error,
+    createTask,
+    reorderTask,
+    addTaskAssignee,
+    removeTaskAssignee,
+    refreshTasks,
+  } = useTasks(session?.user.id)
   const {
     teamMembers,
     isLoading: isTeamLoading,
@@ -112,6 +122,7 @@ function App() {
     refreshLabels,
   } = useLabels(session?.user.id)
   const [activeTask, setActiveTask] = useState<Task | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [activeActionPanel, setActiveActionPanel] = useState<ActionPanel>(null)
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [filters, setFilters] = useState<TaskFilters>({
@@ -155,6 +166,17 @@ function App() {
       overdue,
     }
   }, [tasks])
+
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, tasks],
+  )
+  const {
+    comments,
+    isLoading: isCommentsLoading,
+    error: commentsError,
+    createComment,
+  } = useTaskComments(session?.user.id, selectedTask?.id)
 
   function handleDragStart(event: DragStartEvent) {
     const task = tasks.find((candidate) => candidate.id === event.active.id)
@@ -261,6 +283,18 @@ function App() {
         ) : null}
       </ActionModal>
 
+      <TaskDetailPanel
+        task={selectedTask}
+        teamMembers={teamMembers}
+        comments={comments}
+        isLoading={isCommentsLoading}
+        error={commentsError}
+        onClose={() => setSelectedTaskId(null)}
+        onCreateComment={createComment}
+        onAddAssignee={addTaskAssignee}
+        onRemoveAssignee={removeTaskAssignee}
+      />
+
       <FilterPanel
         filters={filters}
         labels={labels}
@@ -286,6 +320,7 @@ function App() {
               column={column}
               isLoading={isLoading || isSessionLoading}
               tasks={filteredTasksByStatus[column.id]}
+              onOpenTask={setSelectedTaskId}
             />
           ))}
         </section>
@@ -391,6 +426,222 @@ function ActionModal({
         </header>
         {children}
       </section>
+    </div>
+  )
+}
+
+function TaskDetailPanel({
+  task,
+  teamMembers,
+  comments,
+  isLoading,
+  error,
+  onClose,
+  onCreateComment,
+  onAddAssignee,
+  onRemoveAssignee,
+}: {
+  task: Task | null
+  teamMembers: TeamMember[]
+  comments: TaskComment[]
+  isLoading: boolean
+  error: string | null
+  onClose: () => void
+  onCreateComment: (input: { taskId: string; body: string }) => Promise<void>
+  onAddAssignee: (taskId: string, member: TeamMember) => Promise<void>
+  onRemoveAssignee: (taskId: string, teamMemberId: string) => Promise<void>
+}) {
+  const [commentBody, setCommentBody] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState('')
+  const [isAddingAssignee, setIsAddingAssignee] = useState(false)
+  const [removingAssigneeIds, setRemovingAssigneeIds] = useState<string[]>([])
+
+  if (!task) {
+    return null
+  }
+
+  const currentTask = task
+  const dueMeta = getDueMeta(currentTask.due_date)
+  const availableAssignees = teamMembers.filter(
+    (member) => !currentTask.assignees.some((assignee) => assignee.id === member.id),
+  )
+  const safeSelectedAssigneeId = availableAssignees.some((member) => member.id === selectedAssigneeId)
+    ? selectedAssigneeId
+    : ''
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!commentBody.trim()) {
+      return
+    }
+
+    setIsSaving(true)
+    await onCreateComment({ taskId: currentTask.id, body: commentBody })
+    setCommentBody('')
+    setIsSaving(false)
+  }
+
+  async function handleAddAssignee(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const member = availableAssignees.find((candidate) => candidate.id === safeSelectedAssigneeId)
+
+    if (!member) {
+      return
+    }
+
+    setIsAddingAssignee(true)
+    await onAddAssignee(currentTask.id, member)
+    setSelectedAssigneeId('')
+    setIsAddingAssignee(false)
+  }
+
+  async function handleRemoveAssignee(teamMemberId: string) {
+    setRemovingAssigneeIds((current) => [...current, teamMemberId])
+    await onRemoveAssignee(currentTask.id, teamMemberId)
+    setRemovingAssigneeIds((current) => current.filter((candidate) => candidate !== teamMemberId))
+  }
+
+  return (
+    <div className="detail-backdrop" role="presentation" onMouseDown={onClose}>
+      <aside
+        className="task-detail-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="task-detail-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="detail-header">
+          <div>
+            <span className={`priority-pill ${priorityTone[currentTask.priority]}`}>
+              {priorityLabel[currentTask.priority]}
+            </span>
+            <h2 id="task-detail-title">{currentTask.title}</h2>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close task details">
+            <X size={18} />
+          </button>
+        </header>
+
+        <section className="comments-section comments-section-top" aria-label="Task comments">
+          <div className="comments-heading">
+            <h3>
+              <MessageCircle size={16} />
+              Comments
+            </h3>
+            <span>{comments.length}</span>
+          </div>
+
+          <div className="comment-list">
+            {isLoading ? (
+              <p className="comments-empty">Loading comments...</p>
+            ) : comments.length ? (
+              comments.map((comment) => (
+                <article key={comment.id} className="comment-item">
+                  <p>{comment.body}</p>
+                  <time dateTime={comment.created_at}>
+                    {format(parseISO(comment.created_at), 'MMM d, h:mm a')}
+                  </time>
+                </article>
+              ))
+            ) : (
+              <p className="comments-empty">No comments yet. Add the first update.</p>
+            )}
+          </div>
+
+          {error ? <p className="comments-error">{error}</p> : null}
+
+          <form className="comment-form" onSubmit={handleSubmit}>
+            <label htmlFor="task-comment">Write a comment</label>
+            <textarea
+              id="task-comment"
+              value={commentBody}
+              placeholder="Share an update, note, or blocker..."
+              onChange={(event) => setCommentBody(event.target.value)}
+              disabled={isSaving}
+            />
+            <button type="submit" className="modal-primary-submit" disabled={isSaving || !commentBody.trim()}>
+              {isSaving ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
+              Add comment
+            </button>
+          </form>
+        </section>
+
+        <section className="detail-meta" aria-label="Task details">
+          <div>
+            <span>Status</span>
+            <strong>{TASK_COLUMNS.find((column) => column.id === currentTask.status)?.title}</strong>
+          </div>
+          <div>
+            <span>Due date</span>
+            <strong>{dueMeta?.label ?? 'No due date'}</strong>
+        </div>
+        <div>
+            <span>Assignees</span>
+            {currentTask.assignees.length ? (
+              <div className="detail-assignee-list">
+                {currentTask.assignees.map((member) => (
+                  <button
+                    key={member.id}
+                    type="button"
+                    className="detail-assignee-chip"
+                    onClick={() => void handleRemoveAssignee(member.id)}
+                    disabled={removingAssigneeIds.includes(member.id)}
+                    aria-label={`Remove ${member.name} from this task`}
+                  >
+                    <Avatar member={member} size="sm" />
+                    <strong>{member.name}</strong>
+                    <X size={13} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <strong>Unassigned</strong>
+            )}
+            {teamMembers.length ? (
+              <form className="detail-assignee-add" onSubmit={handleAddAssignee}>
+                <select
+                  value={safeSelectedAssigneeId}
+                  onChange={(event) => setSelectedAssigneeId(event.target.value)}
+                  disabled={isAddingAssignee || !availableAssignees.length}
+                  aria-label="Add assignee from team"
+                >
+                  <option value="">
+                    {availableAssignees.length ? 'Add assignee' : 'All team members assigned'}
+                  </option>
+                  {availableAssignees.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={isAddingAssignee || !safeSelectedAssigneeId}
+                  aria-label="Add selected assignee"
+                >
+                  {isAddingAssignee ? <Loader2 className="spin" size={14} /> : <Plus size={14} />}
+                </button>
+              </form>
+            ) : null}
+          </div>
+        </section>
+
+        {currentTask.labels.length ? (
+          <div className="detail-labels">
+            {currentTask.labels.map((label) => (
+              <LabelPill key={label.id} label={label} />
+            ))}
+          </div>
+        ) : null}
+
+        <section className="detail-description">
+          <h3>Description</h3>
+          <p>{currentTask.description || 'No description added yet.'}</p>
+        </section>
+      </aside>
     </div>
   )
 }
@@ -838,7 +1089,7 @@ function LabelPanel({
           Add label
         </button>
       </form>
-    </section>
+      </section>
   )
 }
 
@@ -846,10 +1097,12 @@ function KanbanColumn({
   column,
   tasks,
   isLoading,
+  onOpenTask,
 }: {
   column: (typeof TASK_COLUMNS)[number]
   tasks: Task[]
   isLoading: boolean
+  onOpenTask: (taskId: string) => void
 }) {
   const { isOver, setNodeRef } = useDroppable({ id: column.id })
 
@@ -868,7 +1121,9 @@ function KanbanColumn({
           {isLoading ? (
             <LoadingCards />
           ) : tasks.length ? (
-            tasks.map((task) => <SortableTaskCard key={task.id} task={task} />)
+            tasks.map((task) => (
+              <SortableTaskCard key={task.id} task={task} onOpenTask={onOpenTask} />
+            ))
           ) : (
             <EmptyState status={column.id} />
           )}
@@ -878,7 +1133,13 @@ function KanbanColumn({
   )
 }
 
-function SortableTaskCard({ task }: { task: Task }) {
+function SortableTaskCard({
+  task,
+  onOpenTask,
+}: {
+  task: Task
+  onOpenTask: (taskId: string) => void
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { task },
@@ -897,16 +1158,37 @@ function SortableTaskCard({ task }: { task: Task }) {
       {...listeners}
       {...attributes}
     >
-      <TaskCard task={task} />
+      <TaskCard task={task} onOpen={() => onOpenTask(task.id)} />
     </div>
   )
 }
 
-function TaskCard({ task, isOverlay = false }: { task: Task; isOverlay?: boolean }) {
+function TaskCard({
+  task,
+  isOverlay = false,
+  onOpen,
+}: {
+  task: Task
+  isOverlay?: boolean
+  onOpen?: () => void
+}) {
   const dueMeta = getDueMeta(task.due_date)
 
   return (
-    <article className={`task-card ${isOverlay ? 'task-card-overlay' : ''}`}>
+    <article
+      className={`task-card ${isOverlay ? 'task-card-overlay' : ''} ${onOpen ? 'openable' : ''}`}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (!onOpen || (event.key !== 'Enter' && event.key !== ' ')) {
+          return
+        }
+
+        event.preventDefault()
+        onOpen()
+      }}
+    >
       <div className="card-topline">
         <span className={`priority-pill ${priorityTone[task.priority]}`}>
           {priorityLabel[task.priority]}
