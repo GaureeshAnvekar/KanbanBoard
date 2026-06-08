@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { NewTaskInput, Task, TaskStatus } from '../types/task'
+import type { NewTaskInput, Task, TaskLabel, TaskStatus, TeamMember } from '../types/task'
 import { TASK_COLUMNS } from '../types/task'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 
@@ -9,7 +9,9 @@ type TaskState = {
   isLoading: boolean
   error: string | null
   createTask: (input: NewTaskInput) => Promise<void>
-  moveTask: (taskId: string, nextStatus: TaskStatus) => Promise<void>
+  reorderTask: (taskId: string, overId: string) => Promise<void>
+  addTaskAssignee: (taskId: string, member: TeamMember) => Promise<void>
+  removeTaskAssignee: (taskId: string, teamMemberId: string) => Promise<void>
   refreshTasks: () => Promise<void>
 }
 
@@ -18,6 +20,168 @@ function createEmptyGroups() {
     (groups, column) => ({ ...groups, [column.id]: [] }),
     {} as Record<TaskStatus, Task[]>,
   )
+}
+
+type TaskRow = Omit<Task, 'assignees' | 'labels'>
+
+type AssignmentRow = {
+  task_id: string
+  team_member_id: string
+}
+
+type LabelAssignmentRow = {
+  task_id: string
+  label_id: string
+}
+
+function attachTaskRelations(
+  taskRows: TaskRow[],
+  assignments: AssignmentRow[],
+  teamMembers: TeamMember[],
+  labelAssignments: LabelAssignmentRow[],
+  labels: TaskLabel[],
+): Task[] {
+  const membersById = new Map(teamMembers.map((member) => [member.id, member]))
+  const labelsById = new Map(labels.map((label) => [label.id, label]))
+
+  return taskRows.map((task) => ({
+    ...task,
+    assignees: assignments
+      .filter((assignment) => assignment.task_id === task.id)
+      .map((assignment) => membersById.get(assignment.team_member_id))
+      .filter((member): member is TeamMember => Boolean(member)),
+    labels: labelAssignments
+      .filter((assignment) => assignment.task_id === task.id)
+      .map((assignment) => labelsById.get(assignment.label_id))
+      .filter((label): label is TaskLabel => Boolean(label)),
+  }))
+}
+
+function sortTasks(taskList: Task[]) {
+  return [...taskList].sort((first, second) => {
+    if (first.status === second.status) {
+      return first.position - second.position || first.created_at.localeCompare(second.created_at)
+    }
+
+    return first.status.localeCompare(second.status)
+  })
+}
+
+function normalizeColumn(columnTasks: Task[]) {
+  return columnTasks.map((task, index) => ({ ...task, position: index }))
+}
+
+function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
+  const nextItems = [...items]
+  const [item] = nextItems.splice(fromIndex, 1)
+  nextItems.splice(toIndex, 0, item)
+
+  return nextItems
+}
+
+function getStatusFromId(id: string, tasks: Task[]): TaskStatus | null {
+  const column = TASK_COLUMNS.find((candidate) => candidate.id === id)
+
+  if (column) {
+    return column.id
+  }
+
+  return tasks.find((task) => task.id === id)?.status ?? null
+}
+
+function buildReorderedTasks(tasks: Task[], taskId: string, overId: string) {
+  const activeTask = tasks.find((task) => task.id === taskId)
+  const nextStatus = getStatusFromId(overId, tasks)
+
+  if (!activeTask || !nextStatus) {
+    return tasks
+  }
+
+  const isOverColumn = TASK_COLUMNS.some((column) => column.id === overId)
+  const withoutActive = tasks.filter((task) => task.id !== taskId)
+  const activeTaskInNextStatus = { ...activeTask, status: nextStatus }
+  const originalTargetTasks = sortTasks(tasks.filter((task) => task.status === nextStatus))
+  const targetColumnTasks = sortTasks(withoutActive.filter((task) => task.status === nextStatus))
+  const overTaskIndex = targetColumnTasks.findIndex((task) => task.id === overId)
+  const targetIndex = isOverColumn ? targetColumnTasks.length : overTaskIndex
+
+  if (!isOverColumn && targetIndex === -1) {
+    return tasks
+  }
+
+  const nextTargetTasks =
+    activeTask.status === nextStatus && !isOverColumn
+      ? moveArrayItem(
+          originalTargetTasks,
+          originalTargetTasks.findIndex((task) => task.id === taskId),
+          originalTargetTasks.findIndex((task) => task.id === overId),
+        )
+      : [
+          ...targetColumnTasks.slice(0, targetIndex),
+          activeTaskInNextStatus,
+          ...targetColumnTasks.slice(targetIndex),
+        ]
+  const affectedStatuses = new Set([activeTask.status, nextStatus])
+  const untouchedTasks = withoutActive.filter((task) => !affectedStatuses.has(task.status))
+  const normalizedSourceTasks =
+    activeTask.status === nextStatus
+      ? []
+      : normalizeColumn(sortTasks(withoutActive.filter((task) => task.status === activeTask.status)))
+
+  return sortTasks([
+    ...untouchedTasks,
+    ...normalizedSourceTasks,
+    ...normalizeColumn(nextTargetTasks),
+  ])
+}
+
+async function loadTasksWithAssignees(userId: string) {
+  if (!supabase) {
+    return { data: [] as Task[], error: null }
+  }
+
+  const [
+    tasksResponse,
+    assignmentsResponse,
+    teamResponse,
+    labelAssignmentsResponse,
+    labelsResponse,
+  ] = await Promise.all([
+    supabase
+      .from('tasks')
+      .select('*')
+      .order('status', { ascending: true })
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: true }),
+    supabase.from('task_assignees').select('task_id, team_member_id').eq('user_id', userId),
+    supabase.from('team_members').select('*').order('created_at', { ascending: true }),
+    supabase.from('task_labels').select('task_id, label_id').eq('user_id', userId),
+    supabase.from('labels').select('*').order('created_at', { ascending: true }),
+  ])
+
+  const error =
+    tasksResponse.error ??
+    assignmentsResponse.error ??
+    teamResponse.error ??
+    labelAssignmentsResponse.error ??
+    labelsResponse.error
+
+  if (error) {
+    return { data: [] as Task[], error }
+  }
+
+  return {
+    data: sortTasks(
+      attachTaskRelations(
+        (tasksResponse.data ?? []) as TaskRow[],
+        (assignmentsResponse.data ?? []) as AssignmentRow[],
+        (teamResponse.data ?? []) as TeamMember[],
+        (labelAssignmentsResponse.data ?? []) as LabelAssignmentRow[],
+        (labelsResponse.data ?? []) as TaskLabel[],
+      ),
+    ),
+    error: null,
+  }
 }
 
 export function useTasks(userId?: string): TaskState {
@@ -35,10 +199,7 @@ export function useTasks(userId?: string): TaskState {
     setIsLoading(true)
     setError(null)
 
-    const { data, error: loadError } = await supabase
-      .from('tasks')
-      .select('*')
-      .order('created_at', { ascending: true })
+    const { data, error: loadError } = await loadTasksWithAssignees(userId)
 
     if (loadError) {
       setError(loadError.message)
@@ -46,7 +207,7 @@ export function useTasks(userId?: string): TaskState {
       return
     }
 
-    setTasks(data ?? [])
+    setTasks(data)
     setIsLoading(false)
   }, [userId])
 
@@ -69,10 +230,7 @@ export function useTasks(userId?: string): TaskState {
       setIsLoading(true)
       setError(null)
 
-      const { data, error: loadError } = await supabase
-        .from('tasks')
-        .select('*')
-        .order('created_at', { ascending: true })
+      const { data, error: loadError } = await loadTasksWithAssignees(userId)
 
       if (!isMounted) {
         return
@@ -84,7 +242,7 @@ export function useTasks(userId?: string): TaskState {
         return
       }
 
-      setTasks(data ?? [])
+      setTasks(data)
       setIsLoading(false)
     }
 
@@ -104,6 +262,11 @@ export function useTasks(userId?: string): TaskState {
 
       setError(null)
 
+      const nextPosition =
+        tasks
+          .filter((task) => task.status === 'todo')
+          .reduce((highest, task) => Math.max(highest, task.position), -1) + 1
+
       const { data, error: createError } = await supabase
         .from('tasks')
         .insert({
@@ -112,6 +275,7 @@ export function useTasks(userId?: string): TaskState {
           priority: input.priority,
           due_date: input.dueDate || null,
           status: 'todo',
+          position: nextPosition,
           user_id: userId,
         })
         .select()
@@ -122,30 +286,77 @@ export function useTasks(userId?: string): TaskState {
         return
       }
 
-      setTasks((current) => [...current, data])
+      if (input.assigneeIds.length) {
+        const { error: assignmentError } = await supabase.from('task_assignees').insert(
+          input.assigneeIds.map((teamMemberId) => ({
+            task_id: data.id,
+            team_member_id: teamMemberId,
+            user_id: userId,
+          })),
+        )
+
+        if (assignmentError) {
+          setError(assignmentError.message)
+          return
+        }
+      }
+
+      if (input.labelIds.length) {
+        const { error: labelError } = await supabase.from('task_labels').insert(
+          input.labelIds.map((labelId) => ({
+            task_id: data.id,
+            label_id: labelId,
+            user_id: userId,
+          })),
+        )
+
+        if (labelError) {
+          setError(labelError.message)
+          return
+        }
+      }
+
+      const { data: refreshedTasks, error: refreshError } = await loadTasksWithAssignees(userId)
+
+      if (refreshError) {
+        setTasks((current) => sortTasks([...current, { ...data, assignees: [], labels: [] }]))
+        setError(refreshError.message)
+        return
+      }
+
+      setTasks(refreshedTasks)
     },
-    [userId],
+    [tasks, userId],
   )
 
-  const moveTask = useCallback(async (taskId: string, nextStatus: TaskStatus) => {
-    const task = tasks.find((candidate) => candidate.id === taskId)
+  const reorderTask = useCallback(async (taskId: string, overId: string) => {
+    const nextTasks = buildReorderedTasks(tasks, taskId, overId)
 
-    if (!supabase || !task || task.status === nextStatus) {
+    if (!supabase || nextTasks === tasks) {
       return
     }
 
+    const supabaseClient = supabase
     const previousTasks = tasks
-    setTasks((current) =>
-      current.map((candidate) =>
-        candidate.id === taskId ? { ...candidate, status: nextStatus } : candidate,
-      ),
-    )
+    setTasks(nextTasks)
     setError(null)
 
-    const { error: updateError } = await supabase
-      .from('tasks')
-      .update({ status: nextStatus })
-      .eq('id', taskId)
+    const changedTasks = nextTasks.filter((nextTask) => {
+      const previousTask = previousTasks.find((task) => task.id === nextTask.id)
+
+      return previousTask?.status !== nextTask.status || previousTask?.position !== nextTask.position
+    })
+
+    const updates = await Promise.all(
+      changedTasks.map((task) =>
+        supabaseClient
+          .from('tasks')
+          .update({ status: task.status, position: task.position })
+          .eq('id', task.id),
+      ),
+    )
+
+    const updateError = updates.find((response) => response.error)?.error
 
     if (updateError) {
       setTasks(previousTasks)
@@ -153,8 +364,77 @@ export function useTasks(userId?: string): TaskState {
     }
   }, [tasks])
 
+  const addTaskAssignee = useCallback(
+    async (taskId: string, member: TeamMember) => {
+      if (!supabase || !userId) {
+        setError('A guest session is required before updating assignees.')
+        return
+      }
+
+      const previousTasks = tasks
+      setError(null)
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId && !task.assignees.some((assignee) => assignee.id === member.id)
+            ? {
+                ...task,
+                assignees: [...task.assignees, member],
+              }
+            : task,
+        ),
+      )
+
+      const { error: addError } = await supabase.from('task_assignees').insert({
+        task_id: taskId,
+        team_member_id: member.id,
+        user_id: userId,
+      })
+
+      if (addError) {
+        setTasks(previousTasks)
+        setError(addError.message)
+      }
+    },
+    [tasks, userId],
+  )
+
+  const removeTaskAssignee = useCallback(
+    async (taskId: string, teamMemberId: string) => {
+      if (!supabase || !userId) {
+        setError('A guest session is required before updating assignees.')
+        return
+      }
+
+      const previousTasks = tasks
+      setError(null)
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId
+            ? {
+                ...task,
+                assignees: task.assignees.filter((member) => member.id !== teamMemberId),
+              }
+            : task,
+        ),
+      )
+
+      const { error: removeError } = await supabase
+        .from('task_assignees')
+        .delete()
+        .eq('user_id', userId)
+        .eq('task_id', taskId)
+        .eq('team_member_id', teamMemberId)
+
+      if (removeError) {
+        setTasks(previousTasks)
+        setError(removeError.message)
+      }
+    },
+    [tasks, userId],
+  )
+
   const tasksByStatus = useMemo(() => {
-    return tasks.reduce(
+    return sortTasks(tasks).reduce(
       (groups, task) => {
         groups[task.status].push(task)
         return groups
@@ -169,7 +449,9 @@ export function useTasks(userId?: string): TaskState {
     isLoading,
     error,
     createTask,
-    moveTask,
+    reorderTask,
+    addTaskAssignee,
+    removeTaskAssignee,
     refreshTasks,
   }
 }
