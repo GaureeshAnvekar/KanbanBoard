@@ -1311,6 +1311,8 @@ button:disabled {
   background: var(--card);
   box-shadow: none;
   cursor: grab;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
